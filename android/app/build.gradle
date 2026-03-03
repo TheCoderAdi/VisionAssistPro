@@ -85,6 +85,12 @@ android {
         versionCode 1
         versionName "1.0"
     }
+    aaptOptions {
+        noCompress "tflite"
+        noCompress "lite"
+        noCompress "bin"
+    }
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -105,11 +111,30 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+
+    // packagingOptions {
+    //     pickFirst "**/*.so"
+    //     pickFirst "**/libc++_shared.so"
+    //     pickFirst "**/libfbjni.so"
+    // }
 }
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // TensorFlow Lite Core
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    
+    // TFLite GPU Delegate
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    
+    // TFLite Support Library (image processing)
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    
+    // Kotlin Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
