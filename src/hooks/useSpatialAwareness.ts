@@ -13,7 +13,9 @@ export function useSpatialAwareness() {
       };
     }
 
-    const critical = detections.filter(d => isCritical(d.boundingBox));
+    const critical = detections.filter(d =>
+      isCritical(d.boundingBox, d.modelName),
+    );
 
     const hasObstacleAhead = detections.some(
       d =>

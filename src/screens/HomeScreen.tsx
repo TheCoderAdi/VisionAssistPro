@@ -8,7 +8,6 @@ import {
   Alert,
   SafeAreaView,
   StatusBar,
-  Platform,
 } from 'react-native';
 import {
   Camera,
@@ -29,6 +28,7 @@ import { useSpatialAwareness } from '../hooks/useSpatialAwareness';
 
 import { AppSettings } from '../types';
 import { DEFAULT_SETTINGS } from '../constants/labels';
+import { debug, warn } from '../utils/logger';
 
 const CAPTURE_INTERVAL_MS = 600;
 
@@ -36,7 +36,7 @@ const HomeScreen: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   const [isRunning, setIsRunning] = useState(true);
-  const [settingsReady, setSettingsReady] = useState(false);
+  const [_settingsReady, setSettingsReady] = useState(false);
 
   const cameraRef = useRef<Camera>(null);
   const captureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -73,7 +73,7 @@ const HomeScreen: React.FC = () => {
           setSettings(prev => ({ ...prev, ...saved }));
         }
       } catch (e) {
-        console.warn('Settings load error:', e);
+        warn('Settings load error:', e);
       } finally {
         setSettingsReady(true);
       }
@@ -153,13 +153,12 @@ const HomeScreen: React.FC = () => {
       try {
         isCapturingRef.current = true;
         const photo = await cameraRef.current.takePhoto({
-          qualityPrioritization: 'speed',
-          skipMetadata: true,
           flash: 'off',
         });
         await processFrame(`file://${photo.path}`);
       } catch (e) {
         // Silently ignore frame capture errors
+        console.warn('Frame capture error:', e);
       } finally {
         isCapturingRef.current = false;
       }
@@ -235,6 +234,7 @@ const HomeScreen: React.FC = () => {
     );
   }
 
+  debug({ detections, s: settings.overlayEnabled });
   // ─── Main Render ──────────────────────────────────────────────────────────
 
   return (
@@ -253,7 +253,7 @@ const HomeScreen: React.FC = () => {
         isActive={isRunning && hasPermission}
         photo={true}
         enableZoomGesture={false}
-        onError={err => console.error('[Camera Error]', err.message)}
+        onError={err => warn('[Camera Error]', err?.message ?? err)}
       />
 
       {/* Overlay */}

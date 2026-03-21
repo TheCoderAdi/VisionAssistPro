@@ -17,7 +17,73 @@ interface Props {
   onClose: () => void;
 }
 
-const STEP = (min: number, max: number, steps: number) => (max - min) / steps;
+// Simple +/- stepper component (moved out of render to avoid recreating functions)
+const Stepper = ({
+  label,
+  value,
+  min,
+  max,
+  step: _step,
+  format,
+  onInc,
+  onDec,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format: (v: number) => string;
+  onInc: () => void;
+  onDec: () => void;
+}) => (
+  <View style={styles.stepperRow}>
+    <Text style={styles.stepperLabel}>{label}</Text>
+    <View style={styles.stepperControls}>
+      <TouchableOpacity
+        style={[styles.stepBtn, value <= min && styles.stepBtnDisabled]}
+        onPress={onDec}
+        disabled={value <= min}
+      >
+        <Text style={styles.stepBtnText}>－</Text>
+      </TouchableOpacity>
+      <Text style={styles.stepperValue}>{format(value)}</Text>
+      <TouchableOpacity
+        style={[styles.stepBtn, value >= max && styles.stepBtnDisabled]}
+        onPress={onInc}
+        disabled={value >= max}
+      >
+        <Text style={styles.stepBtnText}>＋</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+);
+
+const ToggleRow = ({
+  label,
+  subtitle,
+  value,
+  onChange,
+}: {
+  label: string;
+  subtitle?: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) => (
+  <View style={styles.toggleRow}>
+    <View style={styles.toggleText}>
+      <Text style={styles.toggleLabel}>{label}</Text>
+      {subtitle ? <Text style={styles.toggleSubtitle}>{subtitle}</Text> : null}
+    </View>
+    <Switch
+      value={value}
+      onValueChange={onChange}
+      trackColor={{ false: '#3A3A3C', true: '#007AFF' }}
+      thumbColor="#FFFFFF"
+      ios_backgroundColor="#3A3A3C"
+    />
+  </View>
+);
 
 const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
   const [local, setLocal] = useState<AppSettings>({ ...settings });
@@ -36,76 +102,6 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
       console.error('Save settings error:', e);
     }
   };
-
-  // Simple +/- stepper component
-  const Stepper = ({
-    label,
-    value,
-    min,
-    max,
-    _step,
-    format,
-    onInc,
-    onDec,
-  }: {
-    label: string;
-    value: number;
-    min: number;
-    max: number;
-    _step: number;
-    format: (v: number) => string;
-    onInc: () => void;
-    onDec: () => void;
-  }) => (
-    <View style={styles.stepperRow}>
-      <Text style={styles.stepperLabel}>{label}</Text>
-      <View style={styles.stepperControls}>
-        <TouchableOpacity
-          style={[styles.stepBtn, value <= min && styles.stepBtnDisabled]}
-          onPress={onDec}
-          disabled={value <= min}
-        >
-          <Text style={styles.stepBtnText}>－</Text>
-        </TouchableOpacity>
-        <Text style={styles.stepperValue}>{format(value)}</Text>
-        <TouchableOpacity
-          style={[styles.stepBtn, value >= max && styles.stepBtnDisabled]}
-          onPress={onInc}
-          disabled={value >= max}
-        >
-          <Text style={styles.stepBtnText}>＋</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  const ToggleRow = ({
-    label,
-    subtitle,
-    value,
-    onChange,
-  }: {
-    label: string;
-    subtitle?: string;
-    value: boolean;
-    onChange: (v: boolean) => void;
-  }) => (
-    <View style={styles.toggleRow}>
-      <View style={styles.toggleText}>
-        <Text style={styles.toggleLabel}>{label}</Text>
-        {subtitle ? (
-          <Text style={styles.toggleSubtitle}>{subtitle}</Text>
-        ) : null}
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onChange}
-        trackColor={{ false: '#3A3A3C', true: '#007AFF' }}
-        thumbColor="#FFFFFF"
-        ios_backgroundColor="#3A3A3C"
-      />
-    </View>
-  );
 
   return (
     <SafeAreaView style={styles.root}>
@@ -131,14 +127,9 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
           {(
             [
               {
-                key: 'ssd_mobilenet_v2_coco_quant.tflite',
-                name: 'SSD MobileNet',
-                desc: 'Faster · Less RAM\n~30ms inference',
-              },
-              {
                 key: 'yolov8n_float16.tflite',
                 name: 'YOLOv8 Nano',
-                desc: 'More Accurate\n~80ms inference',
+                desc: 'Lightweight · Accurate\n~80ms inference',
               },
             ] as { key: ModelName; name: string; desc: string }[]
           ).map(m => (
@@ -302,7 +293,7 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
           <Text style={styles.saveBtnText}>Save Settings</Text>
         </TouchableOpacity>
 
-        <View style={{ height: 50 }} />
+        <View style={styles.bottomSpacer} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -484,6 +475,9 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  bottomSpacer: {
+    height: 50,
   },
 });
 

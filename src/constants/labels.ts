@@ -113,9 +113,9 @@ export const MEDIUM_URGENCY_LABELS = new Set([
 ]);
 
 export const VIBRATION_PATTERNS: Record<UrgencyLevel | 'obstacle', number[]> = {
-  high: [0, 200, 80, 200, 80, 200],
-  medium: [0, 150, 150, 150],
-  low: [0, 80],
+  high: [0, 300, 100, 300, 100, 300],
+  medium: [0, 200, 150, 200],
+  low: [0, 100],
   obstacle: [0, 600, 100, 600],
 };
 
@@ -133,7 +133,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ttsPitch: 1.0,
   alertInterval: 3000,
   detectionThreshold: 0.5,
-  selectedModel: 'ssd_mobilenet_v2_coco_quant.tflite',
+  selectedModel: 'yolov8n_float16.tflite',
   maxDetections: 5,
   numThreads: 4,
 };

@@ -7,13 +7,7 @@ import android.graphics.Matrix
 import android.os.SystemClock
 import android.util.Log
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.CompatibilityList
-import org.tensorflow.lite.gpu.GpuDelegate
 import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.image.ImageProcessor
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.image.ops.ResizeOp
-import org.tensorflow.lite.support.image.ops.ResizeWithCropOrPadOp
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -32,94 +26,107 @@ class ObjectDetector(
     companion object {
         private const val TAG = "ObjectDetector"
 
-        // SSD MobileNet config
-        private const val SSD_INPUT_SIZE = 300
-        private const val SSD_NUM_DETECTIONS = 10
-
-        // YOLOv8 config
-        private const val YOLO_INPUT_SIZE = 640
-
-        // Output tensor indices for SSD MobileNet
-        private const val OUTPUT_LOCATIONS = 0
-        private const val OUTPUT_CLASSES = 1
-        private const val OUTPUT_SCORES = 2
-        private const val OUTPUT_NUM_DETECTIONS = 3
+    // Input sizes (we ship only YOLOv8 nano)
+    private const val YOLO_INPUT_SIZE = 640
     }
 
     private var interpreter: Interpreter? = null
-    private var gpuDelegate: GpuDelegate? = null
-    private var labels: List<String> = emptyList()
-    private var isYolo: Boolean = false
-    private var inputSize: Int = SSD_INPUT_SIZE
-    private var lastInferenceTime: Long = 0L
+    private var labels: List<String>      = emptyList()
+    private var lastInferenceTime: Long   = 0L
 
-    // ─── Initialization ────────────────────────────────────────────────────────
+    // ─── Model Variant Enum ──────────────────────────────────────────────────────
+
+    enum class ModelVariant {
+        YOLOV8_FLOAT16, // float16/float32 | direct class index
+    }
+
+    // We only support YOLOv8 nano in this build
+    private var isYolo: Boolean = true
+    private var inputSize: Int = YOLO_INPUT_SIZE
+
+    // ─── Initialize ──────────────────────────────────────────────────────────────
 
     fun initialize(): Boolean {
         return try {
-            // Load labels. Try common filenames used in this repo and packages.
+
+            // ── Load Labels ────────────────────────────────────────────────────
             labels = try {
                 FileUtil.loadLabels(context, "models/coco_labels.txt").also {
-                    Log.d(TAG, "Loaded labels from models/coco_labels.txt")
+                    Log.d(TAG, "Loaded ${it.size} labels from coco_labels.txt")
                 }
             } catch (e: Exception) {
                 try {
                     FileUtil.loadLabels(context, "models/labelmap.txt").also {
-                        Log.d(TAG, "Loaded labels from models/labelmap.txt")
+                        Log.d(TAG, "Loaded ${it.size} labels from labelmap.txt")
                     }
                 } catch (e2: Exception) {
-                    Log.w(TAG, "Label file not found: tried models/coco_labels.txt and models/labelmap.txt")
+                    Log.w(TAG, "No label file found, labels will show as 'unknown'")
                     emptyList()
                 }
             }
 
-            // Determine model type
-            isYolo = modelName.contains("yolo", ignoreCase = true)
-            inputSize = if (isYolo) YOLO_INPUT_SIZE else SSD_INPUT_SIZE
+            // ── Model setup (YOLO-only)
+            isYolo = true
+            inputSize = YOLO_INPUT_SIZE
+            Log.d(TAG, "Model set to YOLOv8 (inputSize=$inputSize)")
 
-            // Load model from assets
+            // ── Load Model ─────────────────────────────────────────────────────
+            // ✅ YOUR WORKING APPROACH - simple Interpreter constructor
+            // Avoids the Interpreter.Options class conflict completely
             val modelBuffer = loadModelFile("models/$modelName")
+            interpreter     = Interpreter(modelBuffer)
 
-            // Create a simple Interpreter instance. GPU delegates and custom
-            // options are skipped here to avoid compile-time dependency issues
-            // with the nested Options class in this environment.
-            interpreter = Interpreter(modelBuffer)
-
-            Log.d(TAG, "Model loaded: $modelName | Input size: $inputSize")
-            Log.d(TAG, "Input tensor: ${interpreter?.getInputTensor(0)?.shape()?.contentToString()}")
+            // Log tensor shapes - useful for debugging
+            logTensorInfo()
             true
+
         } catch (e: Exception) {
             Log.e(TAG, "Initialization failed: ${e.message}", e)
             false
         }
     }
 
-    // ─── Main Detection Function ────────────────────────────────────────────────
+    // (Model variant detection removed — this build targets YOLOv8 only)
+
+    // ─── Log Tensor Info (Debug) ──────────────────────────────────────────────
+
+    private fun logTensorInfo() {
+        val interp = interpreter ?: return
+        Log.d(TAG, "=== INPUT TENSORS ===")
+        for (i in 0 until interp.inputTensorCount) {
+            val t = interp.getInputTensor(i)
+            Log.d(TAG, "  Input[$i] shape=${t.shape().contentToString()} " +
+                       "dtype=${t.dataType()}")
+        }
+        Log.d(TAG, "=== OUTPUT TENSORS ===")
+        for (i in 0 until interp.outputTensorCount) {
+            val t = interp.getOutputTensor(i)
+            Log.d(TAG, "  Output[$i] shape=${t.shape().contentToString()} " +
+                       "dtype=${t.dataType()}")
+        }
+    }
+
+    // ─── Main Detect ──────────────────────────────────────────────────────────
 
     fun detect(imagePath: String): List<DetectionResult> {
         val interp = interpreter ?: return emptyList()
 
         return try {
-            // Decode image
-            val bitmap = decodeBitmap(imagePath) ?: return emptyList()
-
-            // Preprocess
-            val processedBitmap = preprocessBitmap(bitmap, inputSize)
+            val bitmap    = decodeBitmap(imagePath) ?: return emptyList()
+            val processed = preprocessBitmap(bitmap, inputSize)
 
             val startTime = SystemClock.uptimeMillis()
 
-            val results = if (isYolo) {
-                runYoloInference(interp, processedBitmap)
-            } else {
-                runSSDInference(interp, processedBitmap)
-            }
+            // YOLO-only: always run YOLO inference
+            val results = runYoloInference(interp, processed)
 
             lastInferenceTime = SystemClock.uptimeMillis() - startTime
-            Log.d(TAG, "Inference time: ${lastInferenceTime}ms | Detections: ${results.size}")
 
-            // Cleanup
+            Log.d(TAG, "Inference: ${lastInferenceTime}ms | " +
+                       "Detections: ${results.size}")
+
             bitmap.recycle()
-            processedBitmap.recycle()
+            processed.recycle()
 
             results
         } catch (e: Exception) {
@@ -128,190 +135,126 @@ class ObjectDetector(
         }
     }
 
-    // ─── SSD MobileNet Inference ────────────────────────────────────────────────
 
-    private fun runSSDInference(
-        interp: Interpreter,
-        bitmap: Bitmap
-    ): List<DetectionResult> {
-
-        // Convert bitmap to ByteBuffer
-        val inputBuffer = bitmapToByteBuffer(bitmap, inputSize, isQuantized = true)
-
-        // Output tensors for SSD MobileNet
-        // [1][10][4]  → bounding boxes [ymin, xmin, ymax, xmax]
-        // [1][10]     → class indices
-        // [1][10]     → confidence scores
-        // [1]         → number of detections
-        val outputBoxes = Array(1) { Array(SSD_NUM_DETECTIONS) { FloatArray(4) } }
-        val outputClasses = Array(1) { FloatArray(SSD_NUM_DETECTIONS) }
-        val outputScores = Array(1) { FloatArray(SSD_NUM_DETECTIONS) }
-        val outputNumDetections = FloatArray(1)
-
-        val outputMap = mapOf(
-            OUTPUT_LOCATIONS to outputBoxes,
-            OUTPUT_CLASSES to outputClasses,
-            OUTPUT_SCORES to outputScores,
-            OUTPUT_NUM_DETECTIONS to outputNumDetections
-        )
-
-        interp.runForMultipleInputsOutputs(arrayOf(inputBuffer), outputMap)
-
-        val numDetections = minOf(
-            outputNumDetections[0].toInt(),
-            SSD_NUM_DETECTIONS,
-            maxDetections
-        )
-
-        val detections = mutableListOf<DetectionResult>()
-
-        for (i in 0 until numDetections) {
-            val score = outputScores[0][i]
-            if (score < threshold) continue
-
-            // SSD box format: [ymin, xmin, ymax, xmax] normalized 0-1
-            val ymin = outputBoxes[0][i][0].coerceIn(0f, 1f)
-            val xmin = outputBoxes[0][i][1].coerceIn(0f, 1f)
-            val ymax = outputBoxes[0][i][2].coerceIn(0f, 1f)
-            val xmax = outputBoxes[0][i][3].coerceIn(0f, 1f)
-
-            val classIndex = outputClasses[0][i].toInt()
-            val label = if (classIndex < labels.size) labels[classIndex] else "unknown"
-
-            detections.add(
-                DetectionResult(
-                    label = label,
-                    confidence = score,
-                    left = xmin,
-                    top = ymin,
-                    right = xmax,
-                    bottom = ymax,
-                    width = xmax - xmin,
-                    height = ymax - ymin
-                )
-            )
-        }
-
-        return detections.sortedByDescending { it.confidence }
-    }
-
-    // ─── YOLOv8 Inference ───────────────────────────────────────────────────────
+    // ─── YOLOv8 Inference ────────────────────────────────────────────────────
 
     private fun runYoloInference(
         interp: Interpreter,
         bitmap: Bitmap
     ): List<DetectionResult> {
 
-        // YOLOv8 input: [1, 640, 640, 3] float32
         val inputBuffer = bitmapToByteBuffer(bitmap, inputSize, isQuantized = false)
-
-        // YOLOv8 output: [1, 84, 8400]
-        // 84 = 4 box coords + 80 classes
-        val numAnchors = 8400
-        val outputData = Array(1) { Array(84) { FloatArray(numAnchors) } }
+        val numAnchors  = 8400
+        val outputData  = Array(1) { Array(84) { FloatArray(numAnchors) } }
 
         interp.run(inputBuffer, outputData)
 
         val detections = mutableListOf<DetectionResult>()
 
         for (i in 0 until numAnchors) {
-            // Find best class
-            var bestClassScore = 0f
-            var bestClassIndex = 0
+            var bestScore = 0f
+            var bestClass = 0
 
             for (c in 4 until 84) {
-                val classScore = outputData[0][c][i]
-                if (classScore > bestClassScore) {
-                    bestClassScore = classScore
-                    bestClassIndex = c - 4
+                val score = outputData[0][c][i]
+                if (score > bestScore) {
+                    bestScore = score
+                    bestClass = c - 4
                 }
             }
 
-            if (bestClassScore < threshold) continue
+            if (bestScore < threshold) continue
 
-            // YOLOv8 box format: [cx, cy, w, h] normalized
-            val cx = outputData[0][0][i] / inputSize
-            val cy = outputData[0][1][i] / inputSize
-            val w  = outputData[0][2][i] / inputSize
-            val h  = outputData[0][3][i] / inputSize
+            // ✅ FIXED: Check if values are already normalized (0-1)
+            // or in pixel coordinates (0-640)
+            val rawCx = outputData[0][0][i]
+            val rawCy = outputData[0][1][i]
+            val rawW  = outputData[0][2][i]
+            val rawH  = outputData[0][3][i]
+
+            // ✅ Normalize only if values are in pixel space (> 1.0)
+            val cx = if (rawCx > 1.0f) rawCx / inputSize else rawCx
+            val cy = if (rawCy > 1.0f) rawCy / inputSize else rawCy
+            val w  = if (rawW  > 1.0f) rawW  / inputSize else rawW
+            val h  = if (rawH  > 1.0f) rawH  / inputSize else rawH
 
             val xmin = (cx - w / 2).coerceIn(0f, 1f)
             val ymin = (cy - h / 2).coerceIn(0f, 1f)
             val xmax = (cx + w / 2).coerceIn(0f, 1f)
             val ymax = (cy + h / 2).coerceIn(0f, 1f)
 
-            val label = if (bestClassIndex < labels.size) {
-                labels[bestClassIndex]
-            } else {
-                "unknown"
-            }
+            val boxW = xmax - xmin
+            val boxH = ymax - ymin
+
+            if (boxW <= 0f || boxH <= 0f) continue
+
+            // ✅ Log for debugging
+            Log.d(TAG, "YOLO[$i]: cx=${"%.3f".format(cx)} " +
+                    "cy=${"%.3f".format(cy)} " +
+                    "w=${"%.3f".format(w)} " +
+                    "h=${"%.3f".format(h)} " +
+                    "area=${"%.4f".format(boxW * boxH)}")
+
+            val label = if (bestClass < labels.size) labels[bestClass] else "unknown"
 
             detections.add(
                 DetectionResult(
-                    label = label,
-                    confidence = bestClassScore,
-                    left = xmin,
-                    top = ymin,
-                    right = xmax,
-                    bottom = ymax,
-                    width = xmax - xmin,
-                    height = ymax - ymin
+                    label      = label,
+                    confidence = bestScore,
+                    left       = xmin,
+                    top        = ymin,
+                    right      = xmax,
+                    bottom     = ymax,
+                    width      = boxW,
+                    height     = boxH
                 )
             )
         }
 
-        // Non-Maximum Suppression
         return nonMaxSuppression(
             detections.sortedByDescending { it.confidence },
-            iouThreshold = 0.45f,
+            iouThreshold  = 0.45f,
             maxDetections = maxDetections
         )
     }
 
-    // ─── Non-Maximum Suppression ────────────────────────────────────────────────
+    // ─── Non-Maximum Suppression ──────────────────────────────────────────────
 
     private fun nonMaxSuppression(
         detections: List<DetectionResult>,
         iouThreshold: Float,
         maxDetections: Int
     ): List<DetectionResult> {
-        val selected = mutableListOf<DetectionResult>()
+        val selected   = mutableListOf<DetectionResult>()
         val suppressed = BooleanArray(detections.size)
 
         for (i in detections.indices) {
             if (suppressed[i]) continue
             selected.add(detections[i])
             if (selected.size >= maxDetections) break
-
             for (j in i + 1 until detections.size) {
-                if (suppressed[j]) continue
-                if (iou(detections[i], detections[j]) > iouThreshold) {
+                if (!suppressed[j] &&
+                    iou(detections[i], detections[j]) > iouThreshold) {
                     suppressed[j] = true
                 }
             }
         }
-
         return selected
     }
 
     private fun iou(a: DetectionResult, b: DetectionResult): Float {
-        val interLeft   = maxOf(a.left, b.left)
-        val interTop    = maxOf(a.top, b.top)
-        val interRight  = minOf(a.right, b.right)
-        val interBottom = minOf(a.bottom, b.bottom)
-
-        val interW = maxOf(0f, interRight - interLeft)
-        val interH = maxOf(0f, interBottom - interTop)
-        val interArea = interW * interH
-
-        val aArea = a.width * a.height
-        val bArea = b.width * b.height
-        val unionArea = aArea + bArea - interArea
-
-        return if (unionArea <= 0f) 0f else interArea / unionArea
+        val iLeft   = maxOf(a.left,   b.left)
+        val iTop    = maxOf(a.top,    b.top)
+        val iRight  = minOf(a.right,  b.right)
+        val iBottom = minOf(a.bottom, b.bottom)
+        val iW      = maxOf(0f, iRight - iLeft)
+        val iH      = maxOf(0f, iBottom - iTop)
+        val iArea   = iW * iH
+        val uArea   = a.width * a.height + b.width * b.height - iArea
+        return if (uArea <= 0f) 0f else iArea / uArea
     }
 
-    // ─── Image Preprocessing ────────────────────────────────────────────────────
+    // ─── Image Helpers ────────────────────────────────────────────────────────
 
     private fun decodeBitmap(imagePath: String): Bitmap? {
         return try {
@@ -324,14 +267,14 @@ class ObjectDetector(
     }
 
     private fun preprocessBitmap(bitmap: Bitmap, size: Int): Bitmap {
+        // Scale keeping aspect ratio then crop to exact size
         val matrix = Matrix()
-        val scale = size.toFloat() / maxOf(bitmap.width, bitmap.height)
+        val scale  = size.toFloat() / maxOf(bitmap.width, bitmap.height)
         matrix.postScale(scale, scale)
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            .let { scaled ->
-                // Ensure exact size
-                Bitmap.createScaledBitmap(scaled, size, size, true)
-            }
+        val scaled = Bitmap.createBitmap(
+            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+        )
+        return Bitmap.createScaledBitmap(scaled, size, size, true)
     }
 
     private fun bitmapToByteBuffer(
@@ -351,16 +294,16 @@ class ObjectDetector(
 
         for (pixel in pixels) {
             val r = (pixel shr 16) and 0xFF
-            val g = (pixel shr 8) and 0xFF
-            val b = pixel and 0xFF
+            val g = (pixel shr 8)  and 0xFF
+            val b =  pixel         and 0xFF
 
             if (isQuantized) {
-                // Quantized model: uint8 values 0-255
+                // Quantized: raw uint8 0-255
                 buffer.put(r.toByte())
                 buffer.put(g.toByte())
                 buffer.put(b.toByte())
             } else {
-                // Float model: normalized -1 to 1
+                // Float: normalize to [-1, +1]
                 buffer.putFloat((r - 127.5f) / 127.5f)
                 buffer.putFloat((g - 127.5f) / 127.5f)
                 buffer.putFloat((b - 127.5f) / 127.5f)
@@ -371,31 +314,29 @@ class ObjectDetector(
         return buffer
     }
 
-    // ─── Load Model File ────────────────────────────────────────────────────────
+    // ─── Load Model ───────────────────────────────────────────────────────────
 
     @Throws(IOException::class)
     private fun loadModelFile(assetPath: String): MappedByteBuffer {
-        val assetFileDescriptor = context.assets.openFd(assetPath)
-        val inputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
-        val fileChannel = inputStream.channel
-        val startOffset = assetFileDescriptor.startOffset
-        val declaredLength = assetFileDescriptor.declaredLength
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+        val afd    = context.assets.openFd(assetPath)
+        val stream = FileInputStream(afd.fileDescriptor)
+        return stream.channel.map(
+            FileChannel.MapMode.READ_ONLY,
+            afd.startOffset,
+            afd.declaredLength
+        )
     }
 
-    // ─── Getters ────────────────────────────────────────────────────────────────
+    // ─── Public Getters ───────────────────────────────────────────────────────
 
     fun getLastInferenceTime(): Long = lastInferenceTime
+    fun isInitialized(): Boolean     = interpreter != null
 
-    fun isInitialized(): Boolean = interpreter != null
-
-    // ─── Cleanup ────────────────────────────────────────────────────────────────
+    // ─── Cleanup ─────────────────────────────────────────────────────────────
 
     fun close() {
         interpreter?.close()
         interpreter = null
-        gpuDelegate?.close()
-        gpuDelegate = null
         Log.d(TAG, "ObjectDetector closed")
     }
 }

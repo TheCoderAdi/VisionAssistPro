@@ -7,6 +7,7 @@ import {
   AppSettings,
 } from '../types';
 import { getDirection } from '../utils/spatialAnalyzer';
+import { debug, warn } from '../utils/logger';
 import { estimateDistance } from '../utils/distanceEstimator';
 import { classifyUrgency } from '../utils/urgencyClassifier';
 
@@ -24,30 +25,16 @@ export function useObjectDetection(settings: AppSettings) {
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<PerformanceMetrics>(INITIAL_METRICS);
 
-  const frameCountRef = useRef(0);
   const lastFrameTimeRef = useRef(Date.now());
   const mountedRef = useRef(true);
+  const isLoadingRef = useRef(false);
 
   // ─── Load / Reload model when settings change ─────────────────────────────
 
-  useEffect(() => {
-    mountedRef.current = true;
-    initModel();
-
-    return () => {
-      mountedRef.current = false;
-      closeModel().catch(console.warn);
-    };
-  }, [
-    settings.selectedModel,
-    settings.detectionThreshold,
-    settings.maxDetections,
-    settings.numThreads,
-  ]);
-
-  const initModel = async () => {
-    if (isLoading) return;
+  const initModel = useCallback(async () => {
+    if (isLoadingRef.current) return;
     setIsLoading(true);
+    isLoadingRef.current = true;
     setError(null);
     setIsModelLoaded(false);
 
@@ -61,7 +48,7 @@ export function useObjectDetection(settings: AppSettings) {
 
       if (mountedRef.current) {
         setIsModelLoaded(result.success);
-        console.log('[TFLite]', result.message);
+        debug('[TFLite]', result.message);
       }
     } catch (e: any) {
       if (mountedRef.current) {
@@ -69,9 +56,27 @@ export function useObjectDetection(settings: AppSettings) {
         setIsModelLoaded(false);
       }
     } finally {
-      if (mountedRef.current) setIsLoading(false);
+      if (mountedRef.current) {
+        setIsLoading(false);
+        isLoadingRef.current = false;
+      }
     }
-  };
+  }, [
+    settings.selectedModel,
+    settings.detectionThreshold,
+    settings.maxDetections,
+    settings.numThreads,
+  ]);
+  // Reload model when settings change
+  useEffect(() => {
+    mountedRef.current = true;
+    initModel();
+
+    return () => {
+      mountedRef.current = false;
+      closeModel().catch(warn);
+    };
+  }, [initModel]);
 
   // ─── Process a single camera frame ────────────────────────────────────────
 
@@ -103,7 +108,10 @@ export function useObjectDetection(settings: AppSettings) {
             };
 
             const direction = getDirection(boundingBox);
-            const distance = estimateDistance(boundingBox);
+            const distance = estimateDistance(
+              boundingBox,
+              settings.selectedModel,
+            );
             const urgency = classifyUrgency(raw.label, distance);
 
             return {
@@ -114,6 +122,7 @@ export function useObjectDetection(settings: AppSettings) {
               direction,
               distance,
               urgency,
+              modelName: settings.selectedModel,
             };
           },
         );
@@ -126,10 +135,10 @@ export function useObjectDetection(settings: AppSettings) {
           detectionCount: enriched.length,
         });
       } catch (e: any) {
-        console.warn('[Detection Error]', e?.message);
+        warn('[Detection Error]', e?.message);
       }
     },
-    [isModelLoaded],
+    [isModelLoaded, settings.selectedModel],
   );
 
   return {

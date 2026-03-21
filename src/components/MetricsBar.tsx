@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { PerformanceMetrics } from '../types';
+import { debug } from '../utils/logger';
 
 interface Props {
   metrics: PerformanceMetrics;
@@ -15,7 +16,7 @@ const MetricsBar: React.FC<Props> = ({
   isLoading,
   modelName,
 }) => {
-  const shortName = modelName.includes('yolo') ? 'YOLOv8' : 'SSD MobileNet';
+  const shortName = 'YOLOv8';
   const statusColor = isModelLoaded
     ? '#34C759'
     : isLoading
@@ -27,6 +28,8 @@ const MetricsBar: React.FC<Props> = ({
     : isLoading
     ? 'Loading Model...'
     : 'Model Error';
+
+  debug({ metrics, isModelLoaded, isLoading, modelName });
 
   return (
     <View style={styles.container}>

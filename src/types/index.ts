@@ -26,6 +26,7 @@ export interface Detection {
   direction: Direction;
   distance: DistanceLevel;
   urgency: UrgencyLevel;
+  modelName: string;
 }
 
 export interface DetectionResponse {
@@ -44,9 +45,7 @@ export interface ModelInfo {
 export type Direction = 'left' | 'center' | 'right';
 export type DistanceLevel = 'near' | 'medium' | 'far';
 export type UrgencyLevel = 'high' | 'medium' | 'low';
-export type ModelName =
-  | 'ssd_mobilenet_v2_coco_quant.tflite'
-  | 'yolov8n_float16.tflite';
+export type ModelName = 'yolov8n_float16.tflite';
 
 export interface AppSettings {
   ttsEnabled: boolean;
