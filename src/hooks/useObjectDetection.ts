@@ -27,6 +27,8 @@ export function useObjectDetection(settings: AppSettings) {
 
   const lastFrameTimeRef = useRef(Date.now());
   const mountedRef = useRef(true);
+  const expiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const DETECTION_EXPIRY_MS = 1000;
   const isLoadingRef = useRef(false);
 
   // ─── Load / Reload model when settings change ─────────────────────────────
@@ -127,7 +129,18 @@ export function useObjectDetection(settings: AppSettings) {
           },
         );
 
-        setDetections(enriched);
+        // Attach timestamp to detections so consumers can expire stale items
+        const timestamp = Date.now();
+        const withTs = enriched.map(d => ({ ...d, lastSeen: timestamp }));
+        setDetections(withTs);
+        // Reset expiry timer: clear previous and set a new one to clear detections
+        if (expiryTimerRef.current) clearTimeout(expiryTimerRef.current);
+        expiryTimerRef.current = setTimeout(() => {
+          if (mountedRef.current) {
+            setDetections([]);
+            setMetrics(INITIAL_METRICS);
+          }
+        }, DETECTION_EXPIRY_MS);
         setMetrics({
           inferenceTime: response.inferenceTime,
           totalTime: response.totalTime,
@@ -135,7 +148,17 @@ export function useObjectDetection(settings: AppSettings) {
           detectionCount: enriched.length,
         });
       } catch (e: any) {
+        // If detection fails (native error, model not loaded, etc.)
+        // clear previous detections so UI does not show stale results.
         warn('[Detection Error]', e?.message);
+        if (mountedRef.current) {
+          setDetections([]);
+          setMetrics(INITIAL_METRICS);
+          if (expiryTimerRef.current) {
+            clearTimeout(expiryTimerRef.current);
+            expiryTimerRef.current = null;
+          }
+        }
       }
     },
     [isModelLoaded, settings.selectedModel],

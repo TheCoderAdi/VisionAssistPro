@@ -27,6 +27,8 @@ export interface Detection {
   distance: DistanceLevel;
   urgency: UrgencyLevel;
   modelName: string;
+  // Timestamp when this detection was last seen (ms since epoch). Optional.
+  lastSeen?: number;
 }
 
 export interface DetectionResponse {

@@ -101,7 +101,7 @@ const HomeScreen: React.FC = () => {
     }
   }, [hasPermission]);
 
-  // ─── Model Error Handler ──────────────────────────────────────────────────
+  // Model Error Handler
 
   useEffect(() => {
     if (error) {
@@ -113,14 +113,21 @@ const HomeScreen: React.FC = () => {
     }
   }, [error]);
 
-  // ─── Feedback on Detections ───────────────────────────────────────────────
+  // Feedback on Detections
 
   useEffect(() => {
-    if (!isRunning || detections.length === 0) return;
+    if (!isRunning) return;
+
+    // If there are no detections, ensure any ongoing vibration is stopped
+    if (detections.length === 0) {
+      cancelVibration();
+      return;
+    }
 
     const report = analyze(detections);
 
     if (report.criticalObjects.length > 0) {
+      // For critical objects, cancel any ongoing vibration and announce guidance
       cancelVibration();
       const msg = getGuidance(report);
       speak(msg, true);
@@ -130,7 +137,16 @@ const HomeScreen: React.FC = () => {
 
     announceDetections(detections);
     processVibrations(detections);
-  }, [detections, isRunning]);
+  }, [
+    detections,
+    isRunning,
+    analyze,
+    getGuidance,
+    cancelVibration,
+    announceDetections,
+    processVibrations,
+    speak,
+  ]);
 
   // ─── Capture Loop ─────────────────────────────────────────────────────────
 
@@ -152,10 +168,10 @@ const HomeScreen: React.FC = () => {
 
       try {
         isCapturingRef.current = true;
-        const photo = await cameraRef.current.takePhoto({
-          flash: 'off',
+        const photo = await cameraRef.current.takeSnapshot({
+          quality: 70,
         });
-        await processFrame(`file://${photo.path}`);
+        await processFrame(photo.path);
       } catch (e) {
         // Silently ignore frame capture errors
         console.warn('Frame capture error:', e);
@@ -253,6 +269,7 @@ const HomeScreen: React.FC = () => {
         isActive={isRunning && hasPermission}
         photo={true}
         enableZoomGesture={false}
+        photoQualityBalance="quality"
         onError={err => warn('[Camera Error]', err?.message ?? err)}
       />
 
