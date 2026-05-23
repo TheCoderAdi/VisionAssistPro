@@ -131,6 +131,11 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
                 name: 'YOLOv8 Nano',
                 desc: 'Lightweight · Accurate\n~80ms inference',
               },
+              {
+                key: 'yolo26n_float16.tflite',
+                name: 'YOLOv26 Nano',
+                desc: 'Experimental · Float16\nRecommended for testing',
+              },
             ] as { key: ModelName; name: string; desc: string }[]
           ).map(m => (
             <TouchableOpacity
