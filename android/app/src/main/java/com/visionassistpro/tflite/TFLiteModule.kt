@@ -16,6 +16,7 @@ class TFLiteModule(
 
     private var detector: ObjectDetector? = null
     private var currentModelName: String = ""
+    private var currentThreshold: Float = 0f
 
     override fun getName(): String = NAME
 
@@ -27,7 +28,7 @@ class TFLiteModule(
         threshold: Double,
         maxDetections: Int,
         numThreads: Int,
-        promise: Promise
+        promise: Promise,
     ) {
         Thread {
             try {
@@ -37,13 +38,11 @@ class TFLiteModule(
                     detector = null
                 }
 
-                if (detector != null && detector!!.isInitialized()) {
-                    promise.resolve(
-                        Arguments.createMap().apply {
-                            putBoolean("success", true)
-                            putString("message", "Model already loaded: $modelName")
-                        }
-                    )
+                if (detector != null && detector!!.isInitialized() && currentModelName == modelName && currentThreshold == threshold.toFloat()) {
+                    promise.resolve(Arguments.createMap().apply {
+                        putBoolean("success", true)
+                        putString("message", "Model already loaded: $modelName")
+                    })
                     return@Thread
                 }
 

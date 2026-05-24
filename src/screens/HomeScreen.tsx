@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Modal,
   Alert,
-  SafeAreaView,
   StatusBar,
 } from 'react-native';
 import {
@@ -26,17 +25,17 @@ import { useTTS } from '../hooks/useTTS';
 import { useVibration } from '../hooks/useVibration';
 import { useSpatialAwareness } from '../hooks/useSpatialAwareness';
 
-import { AppSettings } from '../types';
+import { AppSettings, FeedbackMode } from '../types';
 import { DEFAULT_SETTINGS } from '../constants/labels';
-import { debug, warn } from '../utils/logger';
+import { warn } from '../utils/logger';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-const CAPTURE_INTERVAL_MS = 600;
+const CAPTURE_INTERVAL_MS = 200;
 
 const HomeScreen: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   const [isRunning, setIsRunning] = useState(true);
-  const [_settingsReady, setSettingsReady] = useState(false);
 
   const cameraRef = useRef<Camera>(null);
   const captureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -57,13 +56,23 @@ const HomeScreen: React.FC = () => {
     reloadModel,
   } = useObjectDetection(settings);
 
-  const { speak, announceDetections, stop: stopTTS } = useTTS(settings);
+  // ✅ TTS is active only when feedbackMode === 'tts'
+  const ttsActive = settings.feedbackMode === 'tts';
+  const vibActive = settings.feedbackMode === 'vibration';
+
+  const {
+    speak,
+    announceDetections,
+    stop: stopTTS,
+  } = useTTS({
+    ...settings,
+    ttsEnabled: ttsActive,
+  });
   const { processDetections: processVibrations, cancel: cancelVibration } =
-    useVibration(settings.vibrationEnabled);
+    useVibration(vibActive);
   const { analyze, getGuidance } = useSpatialAwareness();
 
   // ─── Load Settings ────────────────────────────────────────────────────────
-
   useEffect(() => {
     (async () => {
       try {
@@ -74,14 +83,34 @@ const HomeScreen: React.FC = () => {
         }
       } catch (e) {
         warn('Settings load error:', e);
-      } finally {
-        setSettingsReady(true);
       }
     })();
   }, []);
 
-  // ─── Camera Permission ────────────────────────────────────────────────────
+  // Update torch state helper (updates settings and persists). The Camera 'torch' prop
+  // below will apply the actual flashlight state; we avoid direct runtime calls to
+  // cameraRef.setTorch to be compatible across VisionCamera versions and devices.
+  const setTorchEnabled = useCallback(
+    (on: boolean) => {
+      // update state and persist
+      setSettings(prev => {
+        const updated = { ...prev, torchEnabled: on } as AppSettings;
+        AsyncStorage.setItem(
+          '@vision_assist_settings',
+          JSON.stringify(updated),
+        ).catch(() => {});
+        return updated;
+      });
 
+      // Ensure camera is active when turning torch on so the prop takes effect
+      if (on && !isRunning) setIsRunning(true);
+    },
+    [isRunning],
+  );
+
+  // Torch is applied by passing the `torch` prop to the Camera component below.
+
+  // ─── Camera Permission ────────────────────────────────────────────────────
   useEffect(() => {
     if (!hasPermission) {
       requestPermission().then(granted => {
@@ -89,20 +118,14 @@ const HomeScreen: React.FC = () => {
           Alert.alert(
             'Camera Permission Required',
             'Vision Assist needs camera access to detect objects.',
-            [
-              {
-                text: 'Grant Permission',
-                onPress: () => requestPermission(),
-              },
-            ],
+            [{ text: 'Grant Permission', onPress: () => requestPermission() }],
           );
         }
       });
     }
-  }, [hasPermission]);
+  }, [hasPermission, requestPermission]);
 
-  // Model Error Handler
-
+  // ─── Model Error ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (error) {
       Alert.alert(
@@ -111,73 +134,55 @@ const HomeScreen: React.FC = () => {
         [{ text: 'Retry', onPress: reloadModel }, { text: 'OK' }],
       );
     }
-  }, [error]);
+  }, [error, reloadModel]);
 
-  // Feedback on Detections
-
+  // ─── Detection Feedback ───────────────────────────────────────────────────
   useEffect(() => {
     if (!isRunning) return;
-
-    // If there are no detections, ensure any ongoing vibration is stopped
-    if (detections.length === 0) {
-      cancelVibration();
-      return;
-    }
+    if (detections.length === 0) return;
 
     const report = analyze(detections);
 
-    if (report.criticalObjects.length > 0) {
-      // For critical objects, cancel any ongoing vibration and announce guidance
-      cancelVibration();
-      const msg = getGuidance(report);
-      speak(msg, true);
-      processVibrations(detections);
-      return;
+    if (ttsActive) {
+      // TTS mode: speak guidance or announce detections
+      if (report.criticalObjects.length > 0) {
+        speak(getGuidance(report), true);
+      } else {
+        announceDetections(detections);
+      }
     }
 
-    announceDetections(detections);
-    processVibrations(detections);
+    if (vibActive) {
+      // Vibration mode: always process, no TTS interference
+      processVibrations(detections);
+    }
   }, [
     detections,
     isRunning,
+    ttsActive,
+    vibActive,
     analyze,
     getGuidance,
-    cancelVibration,
     announceDetections,
     processVibrations,
     speak,
   ]);
 
   // ─── Capture Loop ─────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (isRunning && isModelLoaded && hasPermission) {
-      startCaptureLoop();
-    } else {
-      stopCaptureLoop();
-    }
-    return () => stopCaptureLoop();
-  }, [isRunning, isModelLoaded, hasPermission]);
-
   const startCaptureLoop = useCallback(() => {
     if (captureTimerRef.current) return;
-
-    captureTimerRef.current = setInterval(async () => {
+    captureTimerRef.current = setInterval(() => {
       if (isCapturingRef.current) return;
-      if (!cameraRef.current) return;
-
-      try {
-        isCapturingRef.current = true;
-        const photo = await cameraRef.current.takeSnapshot({
-          quality: 70,
+      const cam = cameraRef.current;
+      if (!cam) return;
+      isCapturingRef.current = true;
+      cam
+        .takeSnapshot({ quality: 40 })
+        .then(photo => processFrame(`file://${photo.path}`))
+        .catch(e => warn('Frame capture error:', e))
+        .finally(() => {
+          isCapturingRef.current = false;
         });
-        await processFrame(photo.path);
-      } catch (e) {
-        // Silently ignore frame capture errors
-        console.warn('Frame capture error:', e);
-      } finally {
-        isCapturingRef.current = false;
-      }
     }, CAPTURE_INTERVAL_MS);
   }, [processFrame]);
 
@@ -189,37 +194,93 @@ const HomeScreen: React.FC = () => {
     isCapturingRef.current = false;
   }, []);
 
-  // ─── Controls ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (isRunning && isModelLoaded && hasPermission) startCaptureLoop();
+    else stopCaptureLoop();
+    return () => stopCaptureLoop();
+  }, [
+    isRunning,
+    isModelLoaded,
+    hasPermission,
+    startCaptureLoop,
+    stopCaptureLoop,
+  ]);
 
+  // ─── Quick toggle feedback mode from main screen ──────────────────────────
+  const toggleFeedbackMode = useCallback(() => {
+    const next: FeedbackMode =
+      settings.feedbackMode === 'tts' ? 'vibration' : 'tts';
+    const updated = { ...settings, feedbackMode: next };
+    setSettings(updated);
+    AsyncStorage.setItem(
+      '@vision_assist_settings',
+      JSON.stringify(updated),
+    ).catch(() => {});
+    // Announce mode change via whichever mode is now active
+    if (next === 'tts') {
+      // Switching TO tts — speak it
+      setTimeout(() => speak('Audio mode', true), 100);
+    } else {
+      // Switching TO vibration — stop TTS, give a triple buzz confirmation
+      stopTTS();
+      cancelVibration();
+      // Triple buzz = feedback mode confirmation
+      setTimeout(() => {
+        const { Vibration } = require('react-native');
+        Vibration.vibrate([1, 120, 80, 120, 80, 120]);
+      }, 150);
+    }
+  }, [settings, speak, stopTTS, cancelVibration]);
+
+  // ─── Controls ─────────────────────────────────────────────────────────────
   const toggleRunning = useCallback(() => {
     if (isRunning) {
       stopCaptureLoop();
       stopTTS();
       cancelVibration();
       setIsRunning(false);
-      speak('Vision Assist paused', true);
+      if (ttsActive) speak('Vision Assist paused', true);
     } else {
       setIsRunning(true);
-      speak('Vision Assist resumed', true);
+      if (ttsActive) speak('Vision Assist resumed', true);
     }
-  }, [isRunning, stopCaptureLoop, stopTTS, cancelVibration, speak]);
+  }, [isRunning, ttsActive, stopCaptureLoop, stopTTS, cancelVibration, speak]);
 
   const describeScene = useCallback(() => {
+    if (!ttsActive) {
+      // In vibration mode, describe scene temporarily switches to TTS for one utterance
+      const report = analyze(detections);
+      const guidance = getGuidance(report);
+      const msg = guidance
+        ? guidance
+        : detections.length === 0
+        ? 'No objects detected. Path appears clear.'
+        : `Detected: ${detections.map(d => d.label).join(', ')}`;
+      // Force-speak even in vibration mode for this one action
+      const Tts = require('react-native-tts').default;
+      Tts.speak(msg);
+      return;
+    }
     const report = analyze(detections);
     const guidance = getGuidance(report);
-
-    if (guidance) {
-      speak(guidance, true);
-    } else if (detections.length === 0) {
+    if (guidance) speak(guidance, true);
+    else if (detections.length === 0)
       speak('No objects detected. Path appears clear.', true);
-    } else {
-      const labels = detections.map(d => d.label).join(', ');
-      speak(`Detected: ${labels}`, true);
-    }
-  }, [detections, analyze, getGuidance, speak]);
+    else speak(`Detected: ${detections.map(d => d.label).join(', ')}`, true);
+  }, [detections, ttsActive, analyze, getGuidance, speak]);
 
-  // ─── Permission Screen ────────────────────────────────────────────────────
+  const handleSettingsSave = useCallback(
+    (newSettings: AppSettings) => {
+      setShowSettings(false);
+      setTimeout(() => {
+        setSettings(newSettings);
+        if (newSettings.feedbackMode === 'tts') speak('Settings saved', true);
+      }, 350);
+    },
+    [speak],
+  );
 
+  // ─── Permission Screens ───────────────────────────────────────────────────
   if (!hasPermission) {
     return (
       <View style={styles.centeredScreen}>
@@ -250,9 +311,7 @@ const HomeScreen: React.FC = () => {
     );
   }
 
-  debug({ detections, s: settings.overlayEnabled });
   // ─── Main Render ──────────────────────────────────────────────────────────
-
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar
@@ -267,9 +326,12 @@ const HomeScreen: React.FC = () => {
         style={StyleSheet.absoluteFill}
         device={device}
         isActive={isRunning && hasPermission}
+        // use the official 'torch' prop supported by react-native-vision-camera
+        // to toggle the flashlight instead of calling setTorch on the ref.
+        torch={settings.torchEnabled ? 'on' : 'off'}
         photo={true}
         enableZoomGesture={false}
-        photoQualityBalance="quality"
+        photoQualityBalance="speed"
         onError={err => warn('[Camera Error]', err?.message ?? err)}
       />
 
@@ -295,23 +357,44 @@ const HomeScreen: React.FC = () => {
         </View>
       )}
 
-      {/* Detection Cards */}
+      {/* Feedback mode pill — visible at all times so user knows current mode */}
+      <View style={styles.modePill}>
+        <Text style={styles.modePillIcon}>{ttsActive ? '🔊' : '📳'}</Text>
+        <Text style={styles.modePillText}>
+          {ttsActive ? 'Audio' : 'Vibration'}
+        </Text>
+      </View>
+
       <DetectionPanel detections={detections} />
 
-      {/* Bottom Controls */}
+      {/* Bottom Controls — 4 buttons now */}
       <View style={styles.controls}>
+        {/* Lighting Control - larger and more visible */}
+        <TouchableOpacity
+          style={[styles.ctrlBtn, styles.ctrlBtnSecondary]}
+          onPress={() => setTorchEnabled(!settings.torchEnabled)}
+          accessibilityLabel="Toggle flashlight"
+          accessibilityHint="Turns the camera flash on or off"
+        >
+          <Text style={styles.ctrlIcon}>
+            {settings.torchEnabled ? '🔦' : '💡'}
+          </Text>
+          <Text style={styles.ctrlLabel}>
+            {settings.torchEnabled ? 'Torch ON' : 'Torch'}
+          </Text>
+        </TouchableOpacity>
+
         {/* Settings */}
         <TouchableOpacity
           style={[styles.ctrlBtn, styles.ctrlBtnSecondary]}
           onPress={() => setShowSettings(true)}
           accessibilityLabel="Open settings"
-          accessibilityHint="Configure model, audio, and vibration options"
         >
           <Text style={styles.ctrlIcon}>⚙️</Text>
           <Text style={styles.ctrlLabel}>Settings</Text>
         </TouchableOpacity>
 
-        {/* Play / Pause - center + larger */}
+        {/* Play / Pause */}
         <TouchableOpacity
           style={[styles.ctrlBtn, styles.ctrlBtnMain]}
           onPress={toggleRunning}
@@ -319,7 +402,7 @@ const HomeScreen: React.FC = () => {
             isRunning ? 'Pause detection' : 'Resume detection'
           }
         >
-          <Text style={[styles.ctrlIcon, { fontSize: 28 }]}>
+          <Text style={[styles.ctrlIcon, styles.ctrlIconLarge]}>
             {isRunning ? '⏸' : '▶'}
           </Text>
           <Text style={styles.ctrlLabel}>{isRunning ? 'Pause' : 'Resume'}</Text>
@@ -330,27 +413,39 @@ const HomeScreen: React.FC = () => {
           style={[styles.ctrlBtn, styles.ctrlBtnSecondary]}
           onPress={describeScene}
           accessibilityLabel="Describe current scene"
-          accessibilityHint="Speaks a summary of detected objects and navigation guidance"
         >
           <Text style={styles.ctrlIcon}>🔍</Text>
           <Text style={styles.ctrlLabel}>Describe</Text>
         </TouchableOpacity>
+
+        {/* ✅ NEW: Feedback Mode Toggle */}
+        <TouchableOpacity
+          style={[
+            styles.ctrlBtn,
+            styles.ctrlBtnSecondary,
+            ttsActive ? styles.ctrlBtnTTS : styles.ctrlBtnVib,
+          ]}
+          onPress={toggleFeedbackMode}
+          accessibilityLabel={
+            ttsActive ? 'Switch to vibration mode' : 'Switch to audio mode'
+          }
+          accessibilityHint="Toggles between text-to-speech and vibration feedback"
+        >
+          <Text style={styles.ctrlIcon}>{ttsActive ? '🔊' : '📳'}</Text>
+          <Text style={styles.ctrlLabel}>
+            {ttsActive ? 'Audio' : 'Vibrate'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Settings Modal */}
       <Modal
         visible={showSettings}
         animationType="slide"
-        presentationStyle="pageSheet"
         onRequestClose={() => setShowSettings(false)}
       >
         <SettingsScreen
           settings={settings}
-          onSave={newSettings => {
-            setSettings(newSettings);
-            setShowSettings(false);
-            speak('Settings saved', true);
-          }}
+          onSave={handleSettingsSave}
           onClose={() => setShowSettings(false)}
         />
       </Modal>
@@ -394,10 +489,27 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 14,
   },
-  permissionBtnText: {
+  permissionBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  modePill: {
+    position: 'absolute',
+    top: 110,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    gap: 6,
+  },
+  modePillIcon: { fontSize: 13 },
+  modePillText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   pausedBanner: {
     position: 'absolute',
@@ -425,12 +537,12 @@ const styles = StyleSheet.create({
   controls: {
     position: 'absolute',
     bottom: 36,
-    left: 24,
-    right: 24,
+    left: 16,
+    right: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 18,
+    gap: 12,
   },
   ctrlBtn: {
     alignItems: 'center',
@@ -438,8 +550,8 @@ const styles = StyleSheet.create({
     borderRadius: 100,
   },
   ctrlBtnMain: {
-    width: 88,
-    height: 88,
+    width: 80,
+    height: 80,
     backgroundColor: '#007AFF',
     shadowColor: '#007AFF',
     shadowOffset: { width: 0, height: 4 },
@@ -448,15 +560,22 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   ctrlBtnSecondary: {
-    width: 68,
-    height: 68,
+    width: 62,
+    height: 62,
     backgroundColor: 'rgba(44,44,46,0.88)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
   },
-  ctrlIcon: {
-    fontSize: 22,
+  ctrlBtnTTS: {
+    borderColor: '#34C759',
+    borderWidth: 2,
   },
+  ctrlBtnVib: {
+    borderColor: '#FF9500',
+    borderWidth: 2,
+  },
+  ctrlIcon: { fontSize: 20 },
+  ctrlIconLarge: { fontSize: 28 },
   ctrlLabel: {
     color: '#FFFFFF',
     fontSize: 10,

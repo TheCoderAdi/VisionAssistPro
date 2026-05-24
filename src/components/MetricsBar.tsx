@@ -16,7 +16,7 @@ const MetricsBar: React.FC<Props> = ({
   isLoading,
   modelName,
 }) => {
-  const shortName = 'YOLOv8';
+  const shortName = modelName.replace('.tflite', '').toUpperCase();
   const statusColor = isModelLoaded
     ? '#34C759'
     : isLoading

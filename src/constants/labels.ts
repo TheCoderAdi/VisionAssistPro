@@ -113,10 +113,10 @@ export const MEDIUM_URGENCY_LABELS = new Set([
 ]);
 
 export const VIBRATION_PATTERNS: Record<UrgencyLevel | 'obstacle', number[]> = {
-  high: [0, 300, 100, 300, 100, 300],
-  medium: [0, 200, 150, 200],
-  low: [0, 100],
-  obstacle: [0, 600, 100, 600],
+  high: [1, 300, 100, 300, 100, 300],
+  medium: [1, 200, 150, 200],
+  low: [1, 100],
+  obstacle: [1, 700, 80, 700],
 };
 
 export const URGENCY_COLORS: Record<UrgencyLevel, string> = {
@@ -126,6 +126,7 @@ export const URGENCY_COLORS: Record<UrgencyLevel, string> = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  feedbackMode: 'tts',
   ttsEnabled: true,
   vibrationEnabled: true,
   overlayEnabled: true,
@@ -136,4 +137,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   selectedModel: 'yolov8n_float16.tflite',
   maxDetections: 5,
   numThreads: 4,
+  torchEnabled: false,
 };

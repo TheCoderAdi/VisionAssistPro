@@ -1,3 +1,5 @@
+export type FeedbackMode = 'tts' | 'vibration';
+
 export interface RawDetection {
   label: string;
   confidence: number;
@@ -27,7 +29,6 @@ export interface Detection {
   distance: DistanceLevel;
   urgency: UrgencyLevel;
   modelName: string;
-  // Timestamp when this detection was last seen (ms since epoch). Optional.
   lastSeen?: number;
 }
 
@@ -50,6 +51,7 @@ export type UrgencyLevel = 'high' | 'medium' | 'low';
 export type ModelName = 'yolov8n_float16.tflite' | 'yolo26n_float16.tflite';
 
 export interface AppSettings {
+  feedbackMode: FeedbackMode;
   ttsEnabled: boolean;
   vibrationEnabled: boolean;
   overlayEnabled: boolean;
@@ -60,6 +62,7 @@ export interface AppSettings {
   selectedModel: ModelName;
   maxDetections: number;
   numThreads: number;
+  torchEnabled?: boolean;
 }
 
 export interface PerformanceMetrics {

@@ -58,7 +58,18 @@ class ObjectDetector(
 
             inputSize = YOLO_INPUT_SIZE
             val modelBuffer = loadModelFile("models/$modelName")
-            interpreter = Interpreter(modelBuffer)
+            val options = Interpreter.Options().apply {
+                numThreads = this@ObjectDetector.numThreads
+                useXNNPACK = true
+                try {
+                    val gpuDelegate = org.tensorflow.lite.gpu.GpuDelegate()
+                    addDelegate(gpuDelegate)
+                    Log.d(TAG, "GPU delegate enabled")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "GPU delegate not available at runtime, falling back to CPU: ${t.message}")
+                }
+            }
+            interpreter = Interpreter(modelBuffer, options)
 
             // ✅ Detect format once here — not on every frame
             modelFormat = detectModelFormat()
@@ -66,8 +77,11 @@ class ObjectDetector(
 
             logTensorInfo()
             true
-        } catch (e: Exception) {
-            Log.e(TAG, "Initialization failed: ${e.message}", e)
+        } catch (t: Throwable) {
+            // Catch Throwable to avoid crashes from linkage errors (NoClassDefFoundError)
+            // or other serious issues during initialization. Log and return false so
+            // the JS layer can handle model load failure.
+            Log.e(TAG, "Initialization failed: ${t.message}", t)
             false
         }
     }
@@ -312,7 +326,16 @@ return detections
 
     private fun decodeBitmap(imagePath: String): Bitmap? {
         return try {
-            BitmapFactory.decodeFile(imagePath.removePrefix("file://"))
+            val path = imagePath.removePrefix("file://")
+            // First pass: get dimensions only
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, opts)
+            // Subsample: load at ~2× model input size to keep memory low
+            val targetSize = inputSize * 2
+            opts.inSampleSize = maxOf(1, minOf(opts.outWidth, opts.outHeight) / targetSize)
+            opts.inJustDecodeBounds = false
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888
+            BitmapFactory.decodeFile(path, opts)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to decode bitmap: ${e.message}")
             null
@@ -320,28 +343,34 @@ return detections
     }
 
     private fun preprocessBitmap(bitmap: Bitmap, size: Int): Bitmap {
-        val matrix = Matrix()
-        val scale  = size.toFloat() / maxOf(bitmap.width, bitmap.height)
-        matrix.postScale(scale, scale)
-        val scaled = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        val result = Bitmap.createScaledBitmap(scaled, size, size, true)
-        if (scaled != result) scaled.recycle()
-        return result
+        // Direct scale to square — model expects square input
+        if (bitmap.width == size && bitmap.height == size) return bitmap
+        return Bitmap.createScaledBitmap(bitmap, size, size, true)
     }
 
     private fun bitmapToByteBuffer(bitmap: Bitmap, inputSize: Int, isQuantized: Boolean): ByteBuffer {
         val bytesPerChannel = if (isQuantized) 1 else 4
-        val buffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * bytesPerChannel)
+        val buffer = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * bytesPerChannel)
         buffer.order(ByteOrder.nativeOrder())
-        buffer.rewind()
+
+        val argbBitmap = if (bitmap.config == Bitmap.Config.ARGB_8888) {
+            bitmap
+        } else {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        }
+
         val pixels = IntArray(inputSize * inputSize)
-        bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+        argbBitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+        if (argbBitmap !== bitmap) argbBitmap.recycle()
+
         for (pixel in pixels) {
             val r = (pixel shr 16) and 0xFF
             val g = (pixel shr 8)  and 0xFF
             val b =  pixel         and 0xFF
             if (isQuantized) {
-                buffer.put(r.toByte()); buffer.put(g.toByte()); buffer.put(b.toByte())
+                buffer.put(r.toByte())
+                buffer.put(g.toByte())
+                buffer.put(b.toByte())
             } else {
                 buffer.putFloat(r / 255.0f)
                 buffer.putFloat(g / 255.0f)

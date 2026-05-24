@@ -6,10 +6,11 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
 } from 'react-native';
+// Vibration test removed — haptics are managed elsewhere
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppSettings, ModelName } from '../types';
+import { AppSettings, ModelName, FeedbackMode } from '../types';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface Props {
   settings: AppSettings;
@@ -85,6 +86,76 @@ const ToggleRow = ({
   </View>
 );
 
+// ✅ NEW: Two-option segment control for feedback mode
+const FeedbackModeSelector = ({
+  value,
+  onChange,
+}: {
+  value: FeedbackMode;
+  onChange: (v: FeedbackMode) => void;
+}) => (
+  <View style={styles.segmentContainer}>
+    <TouchableOpacity
+      style={[styles.segmentBtn, value === 'tts' && styles.segmentBtnActive]}
+      onPress={() => onChange('tts')}
+    >
+      <Text style={styles.segmentIcon}>🔊</Text>
+      <Text
+        style={[
+          styles.segmentLabel,
+          value === 'tts' && styles.segmentLabelActive,
+        ]}
+      >
+        Audio (TTS)
+      </Text>
+      <Text
+        style={[
+          styles.segmentDesc,
+          value === 'tts' && styles.segmentDescActive,
+        ]}
+      >
+        Speaks object names{'\n'}and directions aloud
+      </Text>
+      {value === 'tts' && (
+        <View style={styles.segmentCheck}>
+          <Text style={styles.segmentCheckText}>✓</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+
+    <TouchableOpacity
+      style={[
+        styles.segmentBtn,
+        value === 'vibration' && styles.segmentBtnActiveVib,
+      ]}
+      onPress={() => onChange('vibration')}
+    >
+      <Text style={styles.segmentIcon}>📳</Text>
+      <Text
+        style={[
+          styles.segmentLabel,
+          value === 'vibration' && styles.segmentLabelActive,
+        ]}
+      >
+        Vibration
+      </Text>
+      <Text
+        style={[
+          styles.segmentDesc,
+          value === 'vibration' && styles.segmentDescActive,
+        ]}
+      >
+        Haptic patterns for{'\n'}urgency levels
+      </Text>
+      {value === 'vibration' && (
+        <View style={[styles.segmentCheck, { backgroundColor: '#FF9500' }]}>
+          <Text style={styles.segmentCheckText}>✓</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  </View>
+);
+
 const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
   const [local, setLocal] = useState<AppSettings>({ ...settings });
 
@@ -93,15 +164,23 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
 
   const save = async () => {
     try {
+      // Keep ttsEnabled / vibrationEnabled in sync with feedbackMode
+      const toSave: AppSettings = {
+        ...local,
+        ttsEnabled: local.feedbackMode === 'tts',
+        vibrationEnabled: local.feedbackMode === 'vibration',
+      };
       await AsyncStorage.setItem(
         '@vision_assist_settings',
-        JSON.stringify(local),
+        JSON.stringify(toSave),
       );
-      onSave(local);
+      onSave(toSave);
     } catch (e) {
       console.error('Save settings error:', e);
     }
   };
+
+  const isTTS = local.feedbackMode === 'tts';
 
   return (
     <SafeAreaView style={styles.root}>
@@ -215,72 +294,86 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
           />
         </View>
 
-        {/* ── AUDIO SETTINGS ── */}
-        <Text style={styles.section}>🔊 Audio</Text>
-        <View style={styles.card}>
-          <ToggleRow
-            label="Text-to-Speech"
-            subtitle="Announces detected objects"
-            value={local.ttsEnabled}
-            onChange={v => set('ttsEnabled', v)}
-          />
-          <View style={styles.rowDivider} />
-          <Stepper
-            label="Speech Rate"
-            value={local.ttsRate}
-            min={0.2}
-            max={1.5}
-            step={0.05}
-            format={v => `${v.toFixed(2)}x`}
-            onDec={() =>
-              set('ttsRate', Math.max(0.2, +(local.ttsRate - 0.05).toFixed(2)))
-            }
-            onInc={() =>
-              set('ttsRate', Math.min(1.5, +(local.ttsRate + 0.05).toFixed(2)))
-            }
-          />
-          <View style={styles.rowDivider} />
-          <Stepper
-            label="Speech Pitch"
-            value={local.ttsPitch}
-            min={0.5}
-            max={2.0}
-            step={0.1}
-            format={v => `${v.toFixed(1)}`}
-            onDec={() =>
-              set('ttsPitch', Math.max(0.5, +(local.ttsPitch - 0.1).toFixed(1)))
-            }
-            onInc={() =>
-              set('ttsPitch', Math.min(2.0, +(local.ttsPitch + 0.1).toFixed(1)))
-            }
-          />
-          <View style={styles.rowDivider} />
-          <Stepper
-            label="Alert Interval"
-            value={local.alertInterval}
-            min={1000}
-            max={8000}
-            step={500}
-            format={v => `${v / 1000}s`}
-            onDec={() =>
-              set('alertInterval', Math.max(1000, local.alertInterval - 500))
-            }
-            onInc={() =>
-              set('alertInterval', Math.min(8000, local.alertInterval + 500))
-            }
-          />
-        </View>
+        {/* ── FEEDBACK MODE ── */}
+        <Text style={styles.section}>🎯 Feedback Mode</Text>
+        <Text style={styles.sectionNote}>
+          Choose how VisionAssist alerts you. Only one mode is active at a time.
+        </Text>
+        <FeedbackModeSelector
+          value={local.feedbackMode}
+          onChange={v => set('feedbackMode', v)}
+        />
 
-        {/* ── HAPTIC SETTINGS ── */}
-        <Text style={styles.section}>📳 Haptics</Text>
-        <View style={styles.card}>
-          <ToggleRow
-            label="Vibration Feedback"
-            subtitle="Pattern-based urgency alerts"
-            value={local.vibrationEnabled}
-            onChange={v => set('vibrationEnabled', v)}
-          />
-        </View>
+        {/* ── AUDIO SETTINGS — only shown in TTS mode ── */}
+        {isTTS && (
+          <>
+            <Text style={styles.section}>🔊 Audio Settings</Text>
+            <View style={styles.card}>
+              <Stepper
+                label="Speech Rate"
+                value={local.ttsRate}
+                min={0.2}
+                max={1.5}
+                step={0.05}
+                format={v => `${v.toFixed(2)}x`}
+                onDec={() =>
+                  set(
+                    'ttsRate',
+                    Math.max(0.2, +(local.ttsRate - 0.05).toFixed(2)),
+                  )
+                }
+                onInc={() =>
+                  set(
+                    'ttsRate',
+                    Math.min(1.5, +(local.ttsRate + 0.05).toFixed(2)),
+                  )
+                }
+              />
+              <View style={styles.rowDivider} />
+              <Stepper
+                label="Speech Pitch"
+                value={local.ttsPitch}
+                min={0.5}
+                max={2.0}
+                step={0.1}
+                format={v => `${v.toFixed(1)}`}
+                onDec={() =>
+                  set(
+                    'ttsPitch',
+                    Math.max(0.5, +(local.ttsPitch - 0.1).toFixed(1)),
+                  )
+                }
+                onInc={() =>
+                  set(
+                    'ttsPitch',
+                    Math.min(2.0, +(local.ttsPitch + 0.1).toFixed(1)),
+                  )
+                }
+              />
+              <View style={styles.rowDivider} />
+              <Stepper
+                label="Alert Interval"
+                value={local.alertInterval}
+                min={1000}
+                max={8000}
+                step={500}
+                format={v => `${v / 1000}s`}
+                onDec={() =>
+                  set(
+                    'alertInterval',
+                    Math.max(1000, local.alertInterval - 500),
+                  )
+                }
+                onInc={() =>
+                  set(
+                    'alertInterval',
+                    Math.min(8000, local.alertInterval + 500),
+                  )
+                }
+              />
+            </View>
+          </>
+        )}
 
         {/* ── DISPLAY SETTINGS ── */}
         <Text style={styles.section}>📱 Display</Text>
@@ -293,10 +386,11 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
           />
         </View>
 
-        {/* Save Button */}
         <TouchableOpacity style={styles.saveBtn} onPress={save}>
           <Text style={styles.saveBtnText}>Save Settings</Text>
         </TouchableOpacity>
+
+        {/* Test Vibration removed - use device settings or diagnostics screen instead */}
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
@@ -349,8 +443,15 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: 'uppercase',
     marginTop: 24,
-    marginBottom: 10,
+    marginBottom: 6,
     marginLeft: 4,
+  },
+  sectionNote: {
+    color: '#636366',
+    fontSize: 12,
+    marginBottom: 12,
+    marginLeft: 4,
+    lineHeight: 18,
   },
   card: {
     backgroundColor: '#1C1C1E',
@@ -364,6 +465,40 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
     marginHorizontal: 16,
   },
+  // ── Feedback mode selector ─────────────────────────────────────────────
+  segmentContainer: { flexDirection: 'row', gap: 12 },
+  segmentBtn: {
+    flex: 1,
+    backgroundColor: '#1C1C1E',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    alignItems: 'flex-start',
+  },
+  segmentBtnActive: { borderColor: '#34C759', backgroundColor: '#0D2414' },
+  segmentBtnActiveVib: { borderColor: '#FF9500', backgroundColor: '#2A1800' },
+  segmentIcon: { fontSize: 26, marginBottom: 8 },
+  segmentLabel: {
+    color: '#8E8E93',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  segmentLabelActive: { color: '#FFFFFF' },
+  segmentDesc: { color: '#636366', fontSize: 11, lineHeight: 16 },
+  segmentDescActive: { color: '#AAAAAA' },
+  segmentCheck: {
+    marginTop: 12,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#34C759',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentCheckText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  // ── rest ───────────────────────────────────────────────────────────────
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',

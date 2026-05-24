@@ -33,36 +33,50 @@ export function useObjectDetection(settings: AppSettings) {
 
   // ─── Load / Reload model when settings change ─────────────────────────────
 
-  const initModel = useCallback(async () => {
-    if (isLoadingRef.current) return;
+  // Ensure only one concurrent load happens and callers can await the same promise
+  const loadPromiseRef = useRef<Promise<boolean> | null>(null);
+
+  const initModel = useCallback(async (): Promise<boolean> => {
+    // If a load is already in progress, return its promise
+    if (loadPromiseRef.current) return loadPromiseRef.current;
+
     setIsLoading(true);
     isLoadingRef.current = true;
     setError(null);
     setIsModelLoaded(false);
 
-    try {
-      const result = await loadModel({
-        modelName: settings.selectedModel,
-        threshold: settings.detectionThreshold,
-        maxDetections: settings.maxDetections,
-        numThreads: settings.numThreads,
-      });
+    const p = (async () => {
+      try {
+        const result = await loadModel({
+          modelName: settings.selectedModel,
+          threshold: settings.detectionThreshold,
+          maxDetections: settings.maxDetections,
+          numThreads: settings.numThreads,
+        });
 
-      if (mountedRef.current) {
-        setIsModelLoaded(result.success);
-        debug('[TFLite]', result.message);
+        if (mountedRef.current) {
+          setIsModelLoaded(result.success);
+          debug('[TFLite]', result.message);
+        }
+
+        return !!result.success;
+      } catch (e: any) {
+        if (mountedRef.current) {
+          setError(e?.message ?? 'Failed to load model');
+          setIsModelLoaded(false);
+        }
+        return false;
+      } finally {
+        if (mountedRef.current) {
+          setIsLoading(false);
+          isLoadingRef.current = false;
+          loadPromiseRef.current = null;
+        }
       }
-    } catch (e: any) {
-      if (mountedRef.current) {
-        setError(e?.message ?? 'Failed to load model');
-        setIsModelLoaded(false);
-      }
-    } finally {
-      if (mountedRef.current) {
-        setIsLoading(false);
-        isLoadingRef.current = false;
-      }
-    }
+    })();
+
+    loadPromiseRef.current = p;
+    return p;
   }, [
     settings.selectedModel,
     settings.detectionThreshold,
@@ -84,7 +98,14 @@ export function useObjectDetection(settings: AppSettings) {
 
   const processFrame = useCallback(
     async (imagePath: string): Promise<void> => {
-      if (!isModelLoaded || !mountedRef.current) return;
+      if (!mountedRef.current) return;
+
+      // Ensure the model is loaded before attempting detection. If not loaded,
+      // trigger a load and wait for it to finish (avoid concurrent loads).
+      if (!isModelLoaded) {
+        const ok = await initModel();
+        if (!ok) return; // still not loaded
+      }
 
       // FPS calculation
       const now = Date.now();
@@ -93,7 +114,26 @@ export function useObjectDetection(settings: AppSettings) {
       lastFrameTimeRef.current = now;
 
       try {
-        const response = await detectObjects(imagePath);
+        let response;
+        try {
+          response = await detectObjects(imagePath);
+        } catch (innerErr: any) {
+          // If native reports model not loaded, attempt one reload and retry once
+          const msg = innerErr?.message ?? String(innerErr);
+          if (
+            msg.includes('MODEL_NOT_LOADED') ||
+            msg.includes('Model is not loaded')
+          ) {
+            debug(
+              '[TFLite] detectObjects reported model not loaded, reloading...',
+            );
+            const ok = await initModel();
+            if (!ok) throw innerErr; // give up if reload failed
+            response = await detectObjects(imagePath);
+          } else {
+            throw innerErr;
+          }
+        }
 
         if (!mountedRef.current) return;
 
@@ -161,7 +201,7 @@ export function useObjectDetection(settings: AppSettings) {
         }
       }
     },
-    [isModelLoaded, settings.selectedModel],
+    [isModelLoaded, settings.selectedModel, initModel],
   );
 
   return {
