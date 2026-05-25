@@ -148,7 +148,7 @@ const FeedbackModeSelector = ({
         Haptic patterns for{'\n'}urgency levels
       </Text>
       {value === 'vibration' && (
-        <View style={[styles.segmentCheck, { backgroundColor: '#FF9500' }]}>
+        <View style={[styles.segmentCheck, styles.segmentCheckVib]}>
           <Text style={styles.segmentCheckText}>✓</Text>
         </View>
       )}
@@ -214,6 +214,11 @@ const SettingsScreen: React.FC<Props> = ({ settings, onSave, onClose }) => {
                 key: 'yolo26n_float16.tflite',
                 name: 'YOLOv26 Nano',
                 desc: 'Experimental · Float16\nRecommended for testing',
+              },
+              {
+                key: 'yolov26n_320_int8.tflite',
+                name: 'YOLOv26 Nano (INT8)',
+                desc: 'Quantized · Smaller size\nOptimized for lower-latency inference',
               },
             ] as { key: ModelName; name: string; desc: string }[]
           ).map(m => (
@@ -497,6 +502,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  segmentCheckVib: { backgroundColor: '#FF9500' },
   segmentCheckText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   // ── rest ───────────────────────────────────────────────────────────────
   toggleRow: {

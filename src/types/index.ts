@@ -48,7 +48,10 @@ export interface ModelInfo {
 export type Direction = 'left' | 'center' | 'right';
 export type DistanceLevel = 'near' | 'medium' | 'far';
 export type UrgencyLevel = 'high' | 'medium' | 'low';
-export type ModelName = 'yolov8n_float16.tflite' | 'yolo26n_float16.tflite';
+export type ModelName =
+  | 'yolov8n_float16.tflite'
+  | 'yolo26n_float16.tflite'
+  | 'yolov26n_320_int8.tflite';
 
 export interface AppSettings {
   feedbackMode: FeedbackMode;
