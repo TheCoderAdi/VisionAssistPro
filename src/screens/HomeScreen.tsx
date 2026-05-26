@@ -157,6 +157,8 @@ const HomeScreen: React.FC = () => {
 
   // ─── Detection Feedback ───────────────────────────────────────────────────
   useEffect(() => {
+    // Do not announce or vibrate while the onboarding modal is visible.
+    if (showOnboarding) return;
     if (!isRunning) return;
     if (detections.length === 0) return;
 
@@ -185,6 +187,7 @@ const HomeScreen: React.FC = () => {
     announceDetections,
     processVibrations,
     speak,
+    showOnboarding,
   ]);
 
   // ─── Capture Loop ─────────────────────────────────────────────────────────
@@ -213,9 +216,21 @@ const HomeScreen: React.FC = () => {
     isCapturingRef.current = false;
   }, []);
 
+  // Start/stop the capture loop. Respect onboarding visibility so we don't
+  // capture frames (and subsequently trigger TTS/vibration) while the user
+  // is viewing the onboarding flow.
   useEffect(() => {
-    if (isRunning && isModelLoaded && hasPermission) startCaptureLoop();
-    else stopCaptureLoop();
+    if (showOnboarding) {
+      stopCaptureLoop();
+      return;
+    }
+
+    if (isRunning && isModelLoaded && hasPermission) {
+      startCaptureLoop();
+    } else {
+      stopCaptureLoop();
+    }
+
     return () => stopCaptureLoop();
   }, [
     isRunning,
@@ -223,6 +238,7 @@ const HomeScreen: React.FC = () => {
     hasPermission,
     startCaptureLoop,
     stopCaptureLoop,
+    showOnboarding,
   ]);
 
   // ─── Quick toggle feedback mode from main screen ──────────────────────────
