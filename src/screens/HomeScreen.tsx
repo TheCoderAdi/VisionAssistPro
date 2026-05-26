@@ -19,6 +19,7 @@ import MetricsBar from '../components/MetricsBar';
 import DetectionOverlay from '../components/DetectionOverlay';
 import DetectionPanel from '../components/DetectionPanel';
 import SettingsScreen from './SettingsScreen';
+import OnboardingScreen from './OnboardingScreen';
 
 import { useObjectDetection } from '../hooks/useObjectDetection';
 import { useTTS } from '../hooks/useTTS';
@@ -35,6 +36,7 @@ const CAPTURE_INTERVAL_MS = 200;
 const HomeScreen: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [isRunning, setIsRunning] = useState(true);
 
   const cameraRef = useRef<Camera>(null);
@@ -81,8 +83,25 @@ const HomeScreen: React.FC = () => {
           const saved = JSON.parse(raw) as AppSettings;
           setSettings(prev => ({ ...prev, ...saved }));
         }
-      } catch (e) {
-        warn('Settings load error:', e);
+      } catch (_err) {
+        warn('Settings load error:', _err as any);
+      }
+    })();
+  }, []);
+
+  // ─── Show onboarding on first run ─────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        const seen = await AsyncStorage.getItem(
+          '@vision_assist_seen_onboarding',
+        );
+        if (!seen) {
+          // show onboarding modal
+          setShowOnboarding(true);
+        }
+      } catch {
+        // ignore
       }
     })();
   }, []);
@@ -280,6 +299,12 @@ const HomeScreen: React.FC = () => {
     [speak],
   );
 
+  const finishOnboarding = useCallback(() => {
+    // persist that onboarding was seen
+    AsyncStorage.setItem('@vision_assist_seen_onboarding', '1').catch(() => {});
+    setShowOnboarding(false);
+  }, []);
+
   // ─── Permission Screens ───────────────────────────────────────────────────
   if (!hasPermission) {
     return (
@@ -448,6 +473,13 @@ const HomeScreen: React.FC = () => {
           onSave={handleSettingsSave}
           onClose={() => setShowSettings(false)}
         />
+      </Modal>
+      <Modal
+        visible={showOnboarding}
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <OnboardingScreen onFinish={finishOnboarding} />
       </Modal>
     </SafeAreaView>
   );
